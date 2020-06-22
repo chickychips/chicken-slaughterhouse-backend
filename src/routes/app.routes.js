@@ -33,5 +33,21 @@ module.exports = function(app) {
     ],
     controller.purchaseOrder
   );
+
+  app.get(
+    "/api/params/items",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getItemList
+  );
+
+  app.get(
+    "/api/params/suppliers",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getSupplierList
+  );
   
 };
