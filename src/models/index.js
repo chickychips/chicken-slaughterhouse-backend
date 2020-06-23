@@ -7,7 +7,7 @@ var types = require('pg').types;
 types.setTypeParser(1114, val => val); 
 // var moment = require('moment'); // require
 // types.setTypeParser(1114, str => moment.utc(str).format());
-// process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0; 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0; 
 
 // const db = knex({
 //   client: config.client,
