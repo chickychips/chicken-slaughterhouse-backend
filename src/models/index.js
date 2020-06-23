@@ -1,4 +1,4 @@
-// const config = require("../config/db.config.js");
+const config = require("../config/db.config.js");
 const knex = require('knex');
 
 var types = require('pg').types;
