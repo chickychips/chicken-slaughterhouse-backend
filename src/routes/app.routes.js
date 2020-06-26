@@ -155,4 +155,21 @@ module.exports = function(app) {
     ],
     controller.addExpense
   );
+
+  // Storage
+  app.get(
+    "/api/storage/get-fresh-items",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getFreshItemStorage
+  );
+
+  app.get(
+    "/api/storage/get-frozen-items",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getFrozenItemStorage
+  );
 };

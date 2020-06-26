@@ -302,37 +302,65 @@ exports.addMeasurementUnit = (req, res) => {
 
 exports.addItem = (req, res) => {
   console.log('addItem/ incoming')
-  const {
+  let {
    name, description, itemType, itemOutputType, createdBy
   } = req.body;
 
-  db.select('id')
-  .from('item_type')
-  .where('group', '=', itemType)
-  .andWhere('type', '=', itemOutputType)
-  .first()
-  .then(result => {
-    console.log(result);
-    console.log(result.id);
-    return db.insert({
-      name,
-      description,
-      item_type_id: result.id,
-      created_by: createdBy
-    })
-    .into('master_item')
+  name = name.toUpperCase(); 
+  description = description.toUpperCase();
+  console.log(req.body);
+
+  db.transaction(trx => {
+    trx.select('id')
+    .from('item_type')
+    .where('group', '=', itemType)
+    .andWhere('type', '=', itemOutputType)
+    .first()
     .then(result => {
-        res.status(200).send({ 
-          "message": "success",
-        });
+      trx.insert({
+        name,
+        description,
+        item_type_id: result.id,
+        created_by: createdBy
+      })
+      .into('master_item')
+      .then(result => {
+        trx.insert({
+          item_name: name,
+          quantity_weight: 0,
+          quantity_volume: 0
+        })
+        .into('warehouse_fresh')
+        .then(result => {
+          trx.insert({
+            item_name: name,
+            quantity_weight: 0,
+            quantity_volume: 0
+          })
+          .into('warehouse_frozen')
+          .then(result => {
+            res.status(200).send({ 
+              "message": "success",
+            });
+          })
+          .then(trx.commit)
+          .catch(trx.rollback)
+        })
+        .catch(err => {
+          res.status(500).send({ message: err.message });
+        }); 
+      })
+      .catch(err => {
+        res.status(500).send({ message: err.message });
+      }); 
     })
     .catch(err => {
       res.status(500).send({ message: err.message });
-    }); 
-  })
+    });
+  }) 
   .catch(err => {
     res.status(500).send({ message: err.message });
-  }); 
+  });
 };
 
 exports.addExpense = (req, res) => {
@@ -356,6 +384,38 @@ exports.addExpense = (req, res) => {
   .catch(err => {
     res.status(500).send({ message: err.message });
   }); 
+};
+
+// Storage
+exports.getFreshItemStorage = (req, res) => {
+  console.log('getFreshItemStorage/ incoming');
+  return db.select('warehouse_fresh.*', 'item_type.group', 'item_type.type')
+    .from('warehouse_fresh')
+    .innerJoin('master_item', 'warehouse_fresh.item_name', '=', 'master_item.name')
+    .innerJoin('item_type', 'master_item.item_type_id', '=', 'item_type.id')
+    .orderBy('master_item.item_type_id', 'asc')
+    .then(data => {
+      res.status(200).json({ items: data });
+    })
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    })
+};
+
+exports.getFrozenItemStorage = (req, res) => {
+  console.log('getFrozenItemStorage/ incoming');
+  return db.select('warehouse_frozen.*', 'item_type.group', 'item_type.type')
+    .from('warehouse_frozen')
+    .innerJoin('master_item', 'warehouse_frozen.item_name', '=', 'master_item.name')
+    .innerJoin('item_type', 'master_item.item_type_id', '=', 'item_type.id')
+    .where('item_type.group', '<>', 'alive')
+    .orderBy('master_item.item_type_id', 'asc')
+    .then(data => {
+      res.status(200).json({ items: data });
+    })
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    })
 };
 
 // Production/cutting
