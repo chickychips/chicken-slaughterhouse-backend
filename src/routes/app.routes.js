@@ -51,7 +51,7 @@ module.exports = function(app) {
   );
 
   app.get(
-    "/api/production/cutting/get-id",
+    "/api/production/cutting/generate-id",
     [
     authJwt.verifyToken
     ],
@@ -172,4 +172,145 @@ module.exports = function(app) {
     ],
     controller.getFrozenItemStorage
   );
+
+  // Transaction
+  app.get(
+    "/api/transaction/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateSalesOrderId
+  );
+
+  app.get(
+    "/api/transaction/get-transaction-data",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getTransactionData
+  );
+
+  app.post(
+    "/api/transaction/get-transaction-history",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getTransactionHistory
+  );
+
+  app.post(
+    "/api/transaction/get-transaction-detail",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getTransactionDetail
+  );
+
+  app.post(
+    "/api/transaction/add-transaction",
+    [
+      authJwt.verifyToken
+    ],
+    controller.addTransaction
+  );
+
+  // Storage item delivery
+  app.post(
+    "/api/storage/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateDeliveryId
+  );
+
+  app.post(
+    "/api/storage/get-pending-transaction",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getPendingTransaction
+  );
+
+  app.post(
+    "/api/storage/deliver-item",
+    [
+      authJwt.verifyToken
+    ],
+    controller.deliverItem
+  );
+
+// Production / Thawing
+  app.get(
+    "/api/production/thawing/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateThawingId
+  );
+
+  app.get(
+    "/api/production/thawing/get-data",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getThawingData
+  );
+
+  app.post(
+    "/api/production/thawing/process",
+    [
+      authJwt.verifyToken
+    ],
+    controller.processThawing
+  );
+// Production / Freeze
+  app.get(
+    "/api/production/freeze/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateFreezeId
+  );
+
+  app.get(
+    "/api/production/freeze/get-data",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getFreezeData
+  );
+
+  app.post(
+    "/api/production/freeze/process",
+    [
+      authJwt.verifyToken
+    ],
+    controller.processFreeze
+  );
+
+// Production / Expense
+  app.get(
+    "/api/production/expense/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateExpenseId
+  );
+
+  app.get(
+    "/api/production/expense/get-data",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getExpenseData
+  );
+
+  app.post(
+    "/api/production/expense/add",
+    [
+      authJwt.verifyToken
+    ],
+    controller.addExpenseData
+  );
+
 };
