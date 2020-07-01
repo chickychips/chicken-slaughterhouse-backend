@@ -268,6 +268,9 @@ exports.addItem = (req, res) => {
   description = description.toUpperCase();
   console.log(req.body);
 
+  console.log(name);
+  console.log(description);
+  // return res.status(500).send('error');
   db.transaction(trx => {
     trx.select('id')
     .from('item_type')
@@ -574,8 +577,10 @@ exports.generateThawingId = (req, res) => {
 exports.getThawingData = (req, res) => {
   console.log('getThawingData/ incoming');
 
-  return db.select('warehouse_frozen_history.*', 'transaction.customer')
+  db.select('warehouse_frozen_history.*', 'transaction.customer', 'item_type.group', 'item_type.type')
     .from('warehouse_frozen_history')
+    .join('master_item', 'warehouse_frozen_history.item_name', '=', 'master_item.name')
+    .join('item_type', 'master_item.item_type_id', '=', 'item_type.id')
     .innerJoin('transaction', 'warehouse_frozen_history.reference_id', '=', 'transaction.id')
     .leftJoin('thawing_history', 'warehouse_frozen_history.reference_id', '=', 'thawing_history.ref_id')
     .where('warehouse_frozen_history.out_destination', '=', "thawing")
@@ -590,10 +595,24 @@ exports.getThawingData = (req, res) => {
         pendingTransactionId.push(thawingData[i].reference_id);
       }  
 
-      res.status(200).json({
-        pendingTransactionId,
-        thawingData,
-      })
+      return db.select('warehouse_frozen.*', 'item_type.group', 'item_type.type')
+        .from('warehouse_frozen')
+        .join('master_item', 'warehouse_frozen.item_name', '=', 'master_item.name')
+        .join('item_type', 'master_item.item_type_id', '=', 'item_type.id')
+        .where('item_type.group', '<>', "alive")
+        .andWhere('warehouse_frozen.quantity_weight', '>', 0)
+        .andWhere('warehouse_frozen.quantity_volume', '>', 0)
+        .then(stockFrozenData => {
+          res.status(200).json({
+            pendingTransactionId,
+            thawingData,
+            stockFrozenData,
+          })
+        })
+        .catch(err => {
+          res.status(500).send({ message: err.message });
+        })
+
     })
     .catch(err => {
       res.status(500).send({ message: err.message });
@@ -607,19 +626,83 @@ exports.processThawing = (req, res) => {
     thawingId, referenceId, items, createdBy
   } = req.body;
 
-  return db('thawing_history')
-    .insert({
-      id: thawingId,
-      ref_id: referenceId,
-      items,
-      created_by: createdBy,
-    })
-    .then(result => {
-      res.status(200).send({ message: 'ok' });
-    })       
-    .catch(err => {
-      res.status(500).send({ message: err.message });
-    });
+  if(referenceId !== "")
+  {
+    return db('thawing_history')
+      .insert({
+        id: thawingId,
+        ref_id: referenceId,
+        items,
+        created_by: createdBy,
+      })
+      .then(result => {
+        res.status(200).send({ message: 'ok' });
+      })       
+      .catch(err => {
+        res.status(500).send({ message: err.message });
+      });
+  }
+
+  return db.transaction(async (trx) => {
+    await trx('thawing_history')
+      .insert({
+        id: thawingId,
+        ref_id: referenceId,
+        items,
+        created_by: createdBy,
+      })
+
+    for (let index of Object.keys(items)) {
+      let itemName = items[index].item_name;
+      let inputQuantityWeight = items[index].input_quantity_weight;
+      let inputQuantityVolume = items[index].input_quantity_volume;
+      let outputQuantityWeight = items[index].output_quantity_weight;
+      let outputQuantityVolume = items[index].output_quantity_volume;
+
+      await trx('warehouse_frozen_history')
+        .insert({
+          reference_id: thawingId,
+          item_name: itemName,
+          quantity_weight: inputQuantityWeight,
+          quantity_volume: inputQuantityVolume,
+          is_input: "false",
+          out_destination: "fresh",
+          created_by: createdBy,
+        })
+
+      await trx('warehouse_fresh_history')
+        .insert({
+          reference_id: thawingId,
+          item_name: itemName,
+          quantity_weight: outputQuantityWeight,
+          quantity_volume: outputQuantityVolume,
+          is_input: "true",
+          input_source: "frozen",
+          created_by: createdBy,
+        })
+
+      await trx('warehouse_frozen')
+        .update({ 
+          quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(inputQuantityWeight)]),
+          quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(inputQuantityVolume)]),
+        })
+        .where('item_name', '=', itemName)
+
+      await trx('warehouse_fresh')
+        .update({ 
+          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
+          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
+        })
+        .where('item_name', '=', itemName)
+
+    }
+  })
+  .then(result => {
+    res.status(200).send({ message: 'ok' });
+  })       
+  .catch(err => {
+    res.status(500).send({ message: err.message });
+  });
 };
 
 // Production/Freeze
@@ -669,7 +752,7 @@ exports.generateFreezeId = (req, res) => {
 exports.getFreezeData = (req, res) => {
   console.log('getFreezeData/ incoming');
 
-  return db.select('warehouse_fresh.*')
+  return db.select('warehouse_fresh.*', 'item_type.group', 'item_type.type')
     .from('warehouse_fresh')
     .join('master_item', 'warehouse_fresh.item_name', '=', 'master_item.name')
     .join('item_type', 'master_item.item_type_id', '=', 'item_type.id')
@@ -705,16 +788,19 @@ exports.processFreeze = (req, res) => {
 
     for (let index of Object.keys(items)) {
       let itemName = items[index].item_name;
-      let quantityWeight = items[index].quantity_weight;
-      let quantityVolume = items[index].quantity_volume;
+      let inputQuantityWeight = items[index].input_quantity_weight;
+      let inputQuantityVolume = items[index].input_quantity_volume;
+      let outputQuantityWeight = items[index].output_quantity_weight;
+      let outputQuantityVolume = items[index].output_quantity_volume;
 
       await trx('warehouse_fresh_history')
         .insert({
           reference_id: freezeId,
           item_name: itemName,
-          quantity_weight: quantityWeight,
-          quantity_volume: quantityVolume,
+          quantity_weight: inputQuantityWeight,
+          quantity_volume: inputQuantityVolume,
           is_input: "false",
+          out_destination: "frozen",
           created_by: createdBy,
         })
 
@@ -722,24 +808,24 @@ exports.processFreeze = (req, res) => {
         .insert({
           reference_id: freezeId,
           item_name: itemName,
-          quantity_weight: quantityWeight,
-          quantity_volume: quantityVolume,
+          quantity_weight: outputQuantityWeight,
+          quantity_volume: outputQuantityVolume,
           is_input: isInput,
-          input_source: 'fresh',
+          input_source: "fresh",
           created_by: createdBy,
         })
 
       await trx('warehouse_fresh')
         .update({ 
-          quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
-          quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
+          quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(inputQuantityWeight)]),
+          quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(inputQuantityVolume)]),
         })
         .where('item_name', '=', itemName)
 
       await trx('warehouse_frozen')
         .update({ 
-          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
-          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
+          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
+          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
         })
         .where('item_name', '=', itemName)
 
