@@ -1,6 +1,8 @@
 const db = require("../models");
 const knex = require('knex');
 
+// Dashboard
+
 exports.getDashboardData = (req, res) => {
   console.log('getDashboardData/ incoming')
 
@@ -180,8 +182,8 @@ exports.purchaseOrder = (req, res) => {
     .then(result => {
       return trx('warehouse_fresh')
       .update({ 
-        quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
-        quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
+        quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
+        quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
       })
       .where('item_name', '=', itemName)
       .then(result => {
@@ -450,6 +452,301 @@ exports.addExpense = (req, res) => {
 };
 
 // Storage
+
+exports.generateDeliveryId = (req, res) => {
+  console.log('generateDeliveryId/ incoming')
+  const { storageSource } = req.body
+
+ return db.from('delivery_order')
+    .max('id', {as: 'latest_id'})
+    .where('storage_source', '=', storageSource)
+    .first()
+    .then(data => {
+      var padMonth = "00";
+      var currentTime = new Date();
+      var year = '' + currentTime.getFullYear();
+      var month = '' + (currentTime.getMonth() + 1);
+      var monthPadded = padMonth.substring(month.length) + month;
+      var latestIdMonth = '';
+      let warehouseCode = '';
+      if(storageSource === 'fresh')
+      {
+        warehouseCode = 'A'
+      }
+      else
+      {
+        warehouseCode = 'B'
+      }
+
+      var nextRunningNumberPadded = '';
+      var newId = '';
+      if(!data.latest_id){
+        nextRunningNumberPadded = '001';
+      }
+      else{
+        var nextRunningNumber = parseInt(data.latest_id.substring(data.latest_id.length-3, data.latest_id.length)) + 1;
+        latestIdMonth = data.latest_id.substring(9, 11);
+        
+        if(monthPadded === latestIdMonth){
+          nextRunningNumber = nextRunningNumber > 999 ? 1 : nextRunningNumber;
+          nextRunningNumber = '' + nextRunningNumber;   
+        }
+        else {
+          nextRunningNumber = '1';
+        }
+        var padChar = "000";
+
+        nextRunningNumberPadded = padChar.substring(nextRunningNumber.length) + nextRunningNumber;
+      }
+
+      newId = 'SJ' + warehouseCode + '-' + year + '-' + monthPadded + '-' + nextRunningNumberPadded;
+      res.status(200).send({newId: newId});
+    })
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    });
+};
+
+exports.getPendingTransaction = (req, res) => {
+  console.log('getPendingTransaction/ incoming');
+  const { storageSource } = req.body
+
+  if ( storageSource === "fresh" )
+  { 
+    return db.select('transaction_detail.*', 'transaction.customer')
+      .from('transaction_detail')
+      .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
+      .leftJoin('delivery_order', function() {
+        this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
+        .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
+        .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
+        .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
+      })
+      .whereNull('delivery_order.transaction_id')
+      .andWhere('transaction.status', '=', 1)
+      .andWhere('transaction_detail.is_frozen' ,'=', false)
+      .then(pendingTransactionData => {
+        db('transaction_detail')
+        .select('transaction_detail.*', 'transaction.customer','thawing_history.id')
+        .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
+        .leftJoin('delivery_order', function() {
+          this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
+          .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
+          .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
+          .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
+        })
+        .leftJoin('thawing_history', 'transaction_detail.ref_id', '=', 'thawing_history.ref_id')
+        .whereNull('delivery_order.transaction_id')
+        // .whereNotNull('thawing_history.id')
+        .andWhere('transaction.status', '=', 1)
+        .andWhere('transaction_detail.is_frozen' ,'=', true)
+        .andWhere('transaction_detail.is_thawed' ,'=', true)
+        .then(pendingTransactionDataThawing => {
+          console.log(pendingTransactionDataThawing);
+          Array.prototype.push.apply(pendingTransactionData,pendingTransactionDataThawing); 
+          
+          // Get distinct pending transaction id
+          let flags = [], pendingTransactionId = [], i;;
+          for (i = 0; i < pendingTransactionData.length; i++){
+            if(flags[pendingTransactionData[i].ref_id]) continue;
+            flags[pendingTransactionData[i].ref_id] = true;
+            pendingTransactionId.push(pendingTransactionData[i].ref_id);
+          }  
+
+          res.status(200).json({
+            pendingTransactionId,
+            pendingTransactionData,
+          })
+        })
+        .catch(err => {
+          res.status(500).send({ message: err.message });
+        })
+      })
+      .catch(err => {
+        res.status(500).send({ message: err.message });
+      })
+  }
+
+  return db.select('transaction_detail.*', 'transaction.customer')
+    .from('transaction_detail')
+    .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
+    .leftJoin('delivery_order', function() {
+      this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
+      .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
+      .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
+      .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
+    })
+    .whereNull('delivery_order.transaction_id')
+    .andWhere('transaction.status', '=', 1)
+    .andWhere('transaction_detail.is_frozen' ,'=', true)
+    .then(pendingTransactionData => {
+      // Get distinct pending transaction id
+      let flags = [], pendingTransactionId = [], i;;
+      for (i = 0; i < pendingTransactionData.length; i++){
+        if(flags[pendingTransactionData[i].ref_id]) continue;
+        flags[pendingTransactionData[i].ref_id] = true;
+        pendingTransactionId.push(pendingTransactionData[i].ref_id);
+      }  
+      
+      res.status(200).json({
+        pendingTransactionId,
+        pendingTransactionData,
+      })
+    })
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    })
+};
+
+exports.generateConversionId = (req, res) => {
+  console.log('generateConversionId/ incoming')
+ return db.from('conversion_history')
+    .max('id', {as: 'latest_id'})
+    .first()
+    .then(data => {
+      var padMonth = "00";
+      var currentTime = new Date();
+      var year = '' + currentTime.getFullYear();
+      var month = '' + (currentTime.getMonth() + 1);
+      var monthPadded = padMonth.substring(month.length) + month;
+      var latestIdMonth = '';
+
+      var nextRunningNumberPadded = '';
+      var newId = '';
+      if(!data.latest_id){
+        nextRunningNumberPadded = '001';
+      }
+      else{
+        var nextRunningNumber = parseInt(data.latest_id.substring(data.latest_id.length-3, data.latest_id.length)) + 1;
+        latestIdMonth = data.latest_id.substring(9, 11);
+        
+        if(monthPadded === latestIdMonth){
+          nextRunningNumber = nextRunningNumber > 999 ? 1 : nextRunningNumber;
+          nextRunningNumber = '' + nextRunningNumber;   
+        }
+        else {
+          nextRunningNumber = '1';
+        }
+        var padChar = "000";
+
+        nextRunningNumberPadded = padChar.substring(nextRunningNumber.length) + nextRunningNumber;
+      }
+
+      newId = 'CNV-' + year + '-' + monthPadded + '-' + nextRunningNumberPadded;
+      res.status(200).send({newId: newId});
+    })
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    });
+};
+
+exports.processItemConversion = (req, res) => {
+  console.log('processItemConversion/ incoming');
+  const { 
+    conversionId, storageSource, items, createdBy
+  } = req.body;
+
+  return db.transaction(async (trx) => {
+    await trx('conversion_history')
+      .insert({
+        id: conversionId,
+        storage_source: storageSource,
+        items,
+        created_by: createdBy,
+      })
+
+    for (let index of Object.keys(items)) {
+      let inputItemName = items[index].inputItemName;
+      let outputItemName = items[index].outputItemName;
+      let quantityWeight = items[index].quantityWeight;
+      let quantityVolume = items[index].quantityVolume;
+      let inputOutputSource = "conversion";
+
+      if(storageSource === 'fresh')
+      {
+        await trx('warehouse_fresh_history')
+          .insert({
+            reference_id: conversionId,
+            item_name: inputItemName,
+            quantity_weight: quantityWeight,
+            quantity_volume: quantityVolume,
+            is_input: false,
+            out_destination: inputOutputSource,
+            created_by: createdBy,
+          })
+
+        await trx('warehouse_fresh_history')
+          .insert({
+            reference_id: conversionId,
+            item_name: outputItemName,
+            quantity_weight: quantityWeight,
+            quantity_volume: quantityVolume,
+            is_input: true,
+            input_source: inputOutputSource,
+            created_by: createdBy,
+          })
+
+        await trx('warehouse_fresh')
+          .update({ 
+            quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
+          })
+        .where('item_name', '=', inputItemName)
+
+        await trx('warehouse_fresh')
+          .update({ 
+            quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
+          })
+          .where('item_name', '=', outputItemName)
+      }
+      else{
+        await trx('warehouse_frozen_history')
+          .insert({
+            reference_id: conversionId,
+            item_name: inputItemName,
+            quantity_weight: quantityWeight,
+            quantity_volume: quantityVolume,
+            is_input: false,
+            out_destination: inputOutputSource,
+            created_by: createdBy,
+          })
+
+        await trx('warehouse_frozen_history')
+          .insert({
+            reference_id: conversionId,
+            item_name: outputItemName,
+            quantity_weight: quantityWeight,
+            quantity_volume: quantityVolume,
+            is_input: true,
+            input_source: inputOutputSource,
+            created_by: createdBy,
+          })
+
+        await trx('warehouse_frozen')
+          .update({ 
+            quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
+          })
+        .where('item_name', '=', inputItemName)
+
+        await trx('warehouse_frozen')
+          .update({ 
+            quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
+          })
+          .where('item_name', '=', outputItemName)
+      }
+    }
+  })
+  .then(result => {
+    res.status(200).send({ message: 'ok' });
+  })       
+  .catch(err => {
+    res.status(500).send({ message: err.message });
+  });
+};
+
 exports.getFreshItemStorage = (req, res) => {
   console.log('getFreshItemStorage/ incoming');
   return db.select('warehouse_fresh.*', 'item_type.group', 'item_type.type')
@@ -479,6 +776,159 @@ exports.getFrozenItemStorage = (req, res) => {
     .catch(err => {
       res.status(500).send({ message: err.message });
     })
+};
+
+exports.deliverItem = (req, res) => {
+  console.log('deliverItem/ incoming')
+  const {
+   storageSource, id, transactionId, items, createdBy, 
+  } = req.body;
+
+  let thawingHistoryResult = [];
+
+  if(storageSource === 'fresh')
+  {
+    const itemNeedThawing = items.filter(data => {
+      return data.isThawed === true
+    })
+
+    return db.select('id')
+      .from('thawing_history')
+      .where('ref_id', '=', transactionId)
+      .then(result => {
+        // Check if there's an item that needs thawing but not in thawing history
+        if(result.length === 0 && itemNeedThawing.length > 0)
+        {
+          res.status(403).send({ message: "Item belum di thawing" });
+        }
+        else
+        {
+          db.transaction(async (trx) => {
+            for (let index of Object.keys(items)) {
+              let itemName = items[index].name;
+              let isFrozen = items[index].isFrozen;
+              let isThawed = items[index].isThawed;
+              let quantityWeight = items[index].quantityWeight;
+              let quantityVolume = items[index].quantityVolume;
+
+              await trx('delivery_order')
+                .insert({
+                  id,
+                  storage_source: storageSource,
+                  transaction_id: transactionId,
+                  item_name: itemName,
+                  is_frozen: isFrozen,
+                  is_thawed: isThawed,
+                  created_by: createdBy,
+                })
+
+              await trx('warehouse_fresh_history')
+                .insert({
+                  reference_id: transactionId,
+                  item_name: itemName,
+                  quantity_weight: quantityWeight,
+                  quantity_volume: quantityVolume,
+                  is_input: false,
+                  out_destination: "buyer",
+                  created_by: createdBy,
+                })
+            }
+            await trx('transaction')
+              .update({ 
+                status: 2,
+              })
+              .whereIn(function() {
+                  this.count('*')
+                  .from('transaction_detail')
+                  .leftJoin('delivery_order', function() {
+                    this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
+                    .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
+                    .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
+                    .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
+                  })
+                  .whereNull('delivery_order.transaction_id')
+                  .andWhere('transaction_detail.ref_id', '=', transactionId)
+                }, [0])
+              .andWhere('id', '=', transactionId)
+          })
+          .then(result => {
+            res.status(200).send({ message: 'ok' });
+          })       
+          .catch(err => {
+            res.status(500).send({ message: err.message });
+          });
+        }
+    })     
+    .catch(err => {
+      res.status(500).send({ message: err.message });
+    });
+  }
+
+  return db.transaction(async (trx) => {
+
+    for (let index of Object.keys(items)) {
+      let itemName = items[index].name;
+      let isFrozen = items[index].isFrozen;
+      let isThawed = items[index].isThawed;
+      let quantityWeight = items[index].quantityWeight;
+      let quantityVolume = items[index].quantityVolume;
+      let outDestination = "buyer";
+
+      if (isThawed === false)
+      {
+        // if items need thawing, dont insert into delivery order table
+        await trx('delivery_order')
+          .insert({
+            id,
+            storage_source: storageSource,
+            transaction_id: transactionId,
+            item_name: itemName,
+            is_frozen: isFrozen,
+            is_thawed: isThawed,
+            created_by: createdBy,
+          })
+      }
+      else
+      {
+        outDestination = "thawing";
+      }
+
+      await trx('warehouse_frozen_history')
+        .insert({
+          reference_id: transactionId,
+          item_name: itemName,
+          quantity_weight: quantityWeight,
+          quantity_volume: quantityVolume,
+          is_input: false,
+          out_destination: outDestination,
+          created_by: createdBy,
+        })
+    }
+    await trx('transaction')
+      .update({ 
+        status: 2,
+      })
+      .whereIn(function() {
+          this.count('*')
+          .from('transaction_detail')
+          .leftJoin('delivery_order', function() {
+            this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
+            .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
+            .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
+            .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
+          })
+          .whereNull('delivery_order.transaction_id')
+          .andWhere('transaction_detail.ref_id', '=', transactionId)
+          // .limit(1);
+        }, [0])
+      .andWhere('id', '=', transactionId)
+  })
+  .then(result => {
+    res.status(200).send({ message: 'ok' });
+  })       
+  .catch(err => {
+    res.status(500).send({ message: err.message });
+  });
 };
 
 // Production/cutting
@@ -617,8 +1067,8 @@ exports.processCutting = (req, res) => {
 
       await trx('warehouse_fresh')
         .update({ 
-          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
-          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
+          quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(quantityWeight)]),
+          quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(quantityVolume)]),
         })
         .where('item_name', '=', itemName)
 
@@ -792,8 +1242,8 @@ exports.processThawing = (req, res) => {
 
       await trx('warehouse_fresh')
         .update({ 
-          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
-          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
+          quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
+          quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
         })
         .where('item_name', '=', itemName)
 
@@ -926,8 +1376,8 @@ exports.processFreeze = (req, res) => {
 
       await trx('warehouse_frozen')
         .update({ 
-          quantity_weight: knex.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
-          quantity_volume: knex.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
+          quantity_weight: trx.raw('?? + ??', ['quantity_weight', parseInt(outputQuantityWeight)]),
+          quantity_volume: trx.raw('?? + ??', ['quantity_volume', parseInt(outputQuantityVolume)]),
         })
         .where('item_name', '=', itemName)
 
@@ -1241,8 +1691,8 @@ exports.addTransaction = (req, res) => {
       {
         await trx('warehouse_frozen')
           .update({ 
-            quantity_weight: knex.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
-            quantity_volume: knex.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
+            quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
           })
           .where('item_name', '=', itemName) 
       }
@@ -1250,310 +1700,12 @@ exports.addTransaction = (req, res) => {
       {
         await trx('warehouse_fresh')
           .update({ 
-            quantity_weight: knex.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
-            quantity_volume: knex.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
+            quantity_weight: trx.raw('?? - ??', ['quantity_weight', parseInt(quantityWeight)]),
+            quantity_volume: trx.raw('?? - ??', ['quantity_volume', parseInt(quantityVolume)]),
           })
           .where('item_name', '=', itemName) 
       }
     }
-  })
-  .then(result => {
-    res.status(200).send({ message: 'ok' });
-  })       
-  .catch(err => {
-    res.status(500).send({ message: err.message });
-  });
-};
-
-exports.generateDeliveryId = (req, res) => {
-  console.log('generateDeliveryId/ incoming')
-  const { storageSource } = req.body
-
- return db.from('delivery_order')
-    .max('id', {as: 'latest_id'})
-    .where('storage_source', '=', storageSource)
-    .first()
-    .then(data => {
-      var padMonth = "00";
-      var currentTime = new Date();
-      var year = '' + currentTime.getFullYear();
-      var month = '' + (currentTime.getMonth() + 1);
-      var monthPadded = padMonth.substring(month.length) + month;
-      var latestIdMonth = '';
-      let warehouseCode = '';
-      if(storageSource === 'fresh')
-      {
-        warehouseCode = 'A'
-      }
-      else
-      {
-        warehouseCode = 'B'
-      }
-
-      var nextRunningNumberPadded = '';
-      var newId = '';
-      if(!data.latest_id){
-        nextRunningNumberPadded = '001';
-      }
-      else{
-        var nextRunningNumber = parseInt(data.latest_id.substring(data.latest_id.length-3, data.latest_id.length)) + 1;
-        latestIdMonth = data.latest_id.substring(9, 11);
-        
-        if(monthPadded === latestIdMonth){
-          nextRunningNumber = nextRunningNumber > 999 ? 1 : nextRunningNumber;
-          nextRunningNumber = '' + nextRunningNumber;   
-        }
-        else {
-          nextRunningNumber = '1';
-        }
-        var padChar = "000";
-
-        nextRunningNumberPadded = padChar.substring(nextRunningNumber.length) + nextRunningNumber;
-      }
-
-      newId = 'SJ' + warehouseCode + '-' + year + '-' + monthPadded + '-' + nextRunningNumberPadded;
-      res.status(200).send({newId: newId});
-    })
-    .catch(err => {
-      res.status(500).send({ message: err.message });
-    });
-};
-
-exports.getPendingTransaction = (req, res) => {
-  console.log('getPendingTransaction/ incoming');
-  const { storageSource } = req.body
-
-  if ( storageSource === "fresh" )
-  { 
-    return db.select('transaction_detail.*', 'transaction.customer')
-      .from('transaction_detail')
-      .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
-      .leftJoin('delivery_order', function() {
-        this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
-        .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
-        .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
-        .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
-      })
-      .whereNull('delivery_order.transaction_id')
-      .andWhere('transaction.status', '=', 1)
-      .andWhere('transaction_detail.is_frozen' ,'=', false)
-      .then(pendingTransactionData => {
-        db('transaction_detail')
-        .select('transaction_detail.*', 'transaction.customer','thawing_history.id')
-        .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
-        .leftJoin('delivery_order', function() {
-          this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
-          .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
-          .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
-          .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
-        })
-        .leftJoin('thawing_history', 'transaction_detail.ref_id', '=', 'thawing_history.ref_id')
-        .whereNull('delivery_order.transaction_id')
-        // .whereNotNull('thawing_history.id')
-        .andWhere('transaction.status', '=', 1)
-        .andWhere('transaction_detail.is_frozen' ,'=', true)
-        .andWhere('transaction_detail.is_thawed' ,'=', true)
-        .then(pendingTransactionDataThawing => {
-          console.log(pendingTransactionDataThawing);
-          Array.prototype.push.apply(pendingTransactionData,pendingTransactionDataThawing); 
-          
-          // Get distinct pending transaction id
-          let flags = [], pendingTransactionId = [], i;;
-          for (i = 0; i < pendingTransactionData.length; i++){
-            if(flags[pendingTransactionData[i].ref_id]) continue;
-            flags[pendingTransactionData[i].ref_id] = true;
-            pendingTransactionId.push(pendingTransactionData[i].ref_id);
-          }  
-
-          res.status(200).json({
-            pendingTransactionId,
-            pendingTransactionData,
-          })
-        })
-        .catch(err => {
-          res.status(500).send({ message: err.message });
-        })
-      })
-      .catch(err => {
-        res.status(500).send({ message: err.message });
-      })
-  }
-
-  return db.select('transaction_detail.*', 'transaction.customer')
-    .from('transaction_detail')
-    .innerJoin('transaction', 'transaction_detail.ref_id', '=', 'transaction.id')
-    .leftJoin('delivery_order', function() {
-      this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
-      .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
-      .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
-      .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
-    })
-    .whereNull('delivery_order.transaction_id')
-    .andWhere('transaction.status', '=', 1)
-    .andWhere('transaction_detail.is_frozen' ,'=', true)
-    .then(pendingTransactionData => {
-      // Get distinct pending transaction id
-      let flags = [], pendingTransactionId = [], i;;
-      for (i = 0; i < pendingTransactionData.length; i++){
-        if(flags[pendingTransactionData[i].ref_id]) continue;
-        flags[pendingTransactionData[i].ref_id] = true;
-        pendingTransactionId.push(pendingTransactionData[i].ref_id);
-      }  
-      
-      res.status(200).json({
-        pendingTransactionId,
-        pendingTransactionData,
-      })
-    })
-    .catch(err => {
-      res.status(500).send({ message: err.message });
-    })
-};
-
-exports.deliverItem = (req, res) => {
-  console.log('deliverItem/ incoming')
-  const {
-   storageSource, id, transactionId, items, createdBy, 
-  } = req.body;
-
-  let thawingHistoryResult = [];
-
-  if(storageSource === 'fresh')
-  {
-    const itemNeedThawing = items.filter(data => {
-      return data.isThawed === true
-    })
-
-    return db.select('id')
-      .from('thawing_history')
-      .where('ref_id', '=', transactionId)
-      .then(result => {
-        // Check if there's an item that needs thawing but not in thawing history
-        if(result.length === 0 && itemNeedThawing.length > 0)
-        {
-          res.status(403).send({ message: "Item belum di thawing" });
-        }
-        else
-        {
-          db.transaction(async (trx) => {
-            for (let index of Object.keys(items)) {
-              let itemName = items[index].name;
-              let isFrozen = items[index].isFrozen;
-              let isThawed = items[index].isThawed;
-              let quantityWeight = items[index].quantityWeight;
-              let quantityVolume = items[index].quantityVolume;
-
-              await trx('delivery_order')
-                .insert({
-                  id,
-                  storage_source: storageSource,
-                  transaction_id: transactionId,
-                  item_name: itemName,
-                  is_frozen: isFrozen,
-                  is_thawed: isThawed,
-                  created_by: createdBy,
-                })
-
-              await trx('warehouse_fresh_history')
-                .insert({
-                  reference_id: transactionId,
-                  item_name: itemName,
-                  quantity_weight: quantityWeight,
-                  quantity_volume: quantityVolume,
-                  is_input: false,
-                  out_destination: "buyer",
-                  created_by: createdBy,
-                })
-            }
-            await trx('transaction')
-              .update({ 
-                status: 2,
-              })
-              .whereIn(function() {
-                  this.count('*')
-                  .from('transaction_detail')
-                  .leftJoin('delivery_order', function() {
-                    this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
-                    .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
-                    .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
-                    .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
-                  })
-                  .whereNull('delivery_order.transaction_id')
-                  .andWhere('transaction_detail.ref_id', '=', transactionId)
-                }, [0])
-              .andWhere('id', '=', transactionId)
-          })
-          .then(result => {
-            res.status(200).send({ message: 'ok' });
-          })       
-          .catch(err => {
-            res.status(500).send({ message: err.message });
-          });
-        }
-    })     
-    .catch(err => {
-      res.status(500).send({ message: err.message });
-    });
-  }
-
-  return db.transaction(async (trx) => {
-
-    for (let index of Object.keys(items)) {
-      let itemName = items[index].name;
-      let isFrozen = items[index].isFrozen;
-      let isThawed = items[index].isThawed;
-      let quantityWeight = items[index].quantityWeight;
-      let quantityVolume = items[index].quantityVolume;
-      let outDestination = "buyer";
-
-      if (isThawed === false)
-      {
-        // if items need thawing, dont insert into delivery order table
-        await trx('delivery_order')
-          .insert({
-            id,
-            storage_source: storageSource,
-            transaction_id: transactionId,
-            item_name: itemName,
-            is_frozen: isFrozen,
-            is_thawed: isThawed,
-            created_by: createdBy,
-          })
-      }
-      else
-      {
-        outDestination = "thawing";
-      }
-
-      await trx('warehouse_frozen_history')
-        .insert({
-          reference_id: transactionId,
-          item_name: itemName,
-          quantity_weight: quantityWeight,
-          quantity_volume: quantityVolume,
-          is_input: false,
-          out_destination: outDestination,
-          created_by: createdBy,
-        })
-    }
-    await trx('transaction')
-      .update({ 
-        status: 2,
-      })
-      .whereIn(function() {
-          this.count('*')
-          .from('transaction_detail')
-          .leftJoin('delivery_order', function() {
-            this.on('transaction_detail.item_name', '=', 'delivery_order.item_name')
-            .andOn('transaction_detail.is_frozen', '=', 'delivery_order.is_frozen')
-            .andOn('transaction_detail.is_thawed', '=', 'delivery_order.is_thawed')
-            .andOn('transaction_detail.ref_id', '=', 'delivery_order.transaction_id')
-          })
-          .whereNull('delivery_order.transaction_id')
-          .andWhere('transaction_detail.ref_id', '=', transactionId)
-          // .limit(1);
-        }, [0])
-      .andWhere('id', '=', transactionId)
   })
   .then(result => {
     res.status(200).send({ message: 'ok' });

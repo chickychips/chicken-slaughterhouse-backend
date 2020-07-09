@@ -173,6 +173,22 @@ module.exports = function(app) {
     controller.getFrozenItemStorage
   );
 
+  app.get(
+    "/api/storage/conversion/generate-id",
+    [
+      authJwt.verifyToken
+    ],
+    controller.generateConversionId
+  );
+
+  app.post(
+    "/api/storage/conversion/process",
+    [
+      authJwt.verifyToken
+    ],
+    controller.processItemConversion
+  );
+
   // Transaction
   app.get(
     "/api/transaction/generate-id",
