@@ -313,4 +313,13 @@ module.exports = function(app) {
     controller.addExpenseData
   );
 
+  // Dashboard
+  app.get(
+    "/api/dashboard/get-data",
+    [
+      authJwt.verifyToken
+    ],
+    controller.getDashboardData
+  );
+
 };
