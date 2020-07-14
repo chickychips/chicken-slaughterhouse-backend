@@ -1,5 +1,6 @@
 const { authJwt } = require("../middlewares");
 const controller = require("../controllers/app.controller");
+const dashboardController = require("../controllers/dashboard.controller");
 
 module.exports = function(app) {
   app.use(function(req, res, next) {
@@ -335,7 +336,7 @@ module.exports = function(app) {
     [
       authJwt.verifyToken
     ],
-    controller.getDashboardData
+    dashboardController.getDashboardData
   );
 
 };
